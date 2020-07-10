@@ -22,6 +22,21 @@
 #include <f1x/openauto/autoapp/Projection/GSTVideoOutput.hpp>
 #include <f1x/openauto/Common/Log.hpp>
 
+static GstElement* try_gst_parse_launch(const std::string& plugin, GError ** error)
+{
+    std::string	baseVidLaunchStr = "appsrc name=mysrc is-live=true block=false max-latency=100 do-timestamp=true stream-type=stream ! queue ! h264parse ! ";
+    std::string	baseVidLaunchSuffix = "capsfilter caps=video/x-raw name=mycapsfilter";
+
+    GstElement* retval = gst_parse_launch(baseVidLaunchStr + plugin + baseVidLaunchSuffix, &error);
+
+    if(retval)
+    { 
+        OPENAUTO_LOG(info) << "[GSTVideoOutput] Loaded " << plugin << " plugin.";
+    }
+
+    return retval
+}
+
 namespace f1x
 {
 namespace openauto
@@ -46,28 +61,26 @@ GSTVideoOutput::GSTVideoOutput(configuration::IConfiguration::Pointer configurat
 
     videoSink_ = surface_->videoSink();
 
-    GError* error = nullptr;
-    const char* vidLaunchStr = "appsrc name=mysrc is-live=true block=false max-latency=100 do-timestamp=true stream-type=stream ! queue ! h264parse ! "
-        #ifdef RPI
-            #ifdef PI4
-                               "v4l2h264dec ! "
-            #else
-                               "omxh264dec ! "
-            #endif
-        #else
-                               "avdec_h264 ! "
-        #endif
-                               "capsfilter caps=video/x-raw name=mycapsfilter";
-    #ifdef RPI
-        OPENAUTO_LOG(info) << "[GSTVideoOutput] RPI Build, running with " <<
-        #ifdef PI4
-                              "v4l2h264dec";
-        #else
-                              "omxh264dec";
-        #endif
-    #endif
-    
+    GError* error_pi4 = nullptr;
+    GError* error_pi3 = nullptr;
+    GError* error_others = nullptr;
+
+    vidPipeline_ = 
+        try_gst_parse_launch("v4l2h264dec", error_pi4) ||
+        try_gst_parse_launch("omxh264dec", error_pi3) ||
+        try_gst_parse_launch("avdec_h264", error_others);
+        
+
     vidPipeline_ = gst_parse_launch(vidLaunchStr, &error);
+    
+    if(!vidPipeline)
+    {
+        OPENAUTO_LOG(error) << "[GSTVideoOutput] Plugin load failed."
+        OPENAUTO_LOG(error) << "[GSTVideoOutput] RPI4 Plugin failed with " << error_pi4->message; 
+        OPENAUTO_LOG(error) << "[GSTVideoOutput] RPI3 Plugin failed with " << error_pi3->message; 
+        OPENAUTO_LOG(error) << "[GSTVideoOutput] Other Plugin failed with " << error_others->message; 
+    }
+    
     GstBus* bus = gst_pipeline_get_bus(GST_PIPELINE(vidPipeline_));
     gst_bus_add_watch(bus, (GstBusFunc)&GSTVideoOutput::busCallback, this);
     gst_object_unref(bus);
